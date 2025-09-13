@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paired-replacement-algorithm"
+version = "1.0.0"
+authors = [
+    {name = "Mohammad Tanzil Idrisi", email = "idrisitanzil@gmail.com"},
+]
+description = "A novel cache replacement technique for dynamic sparse neural network inference"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "numpy>=1.20.0",
+    "torch>=1.12.0",
+]
+
+[project.optional-dependencies]
+benchmarks = [
+    "matplotlib>=3.5.0",
+    "pandas>=1.3.0",
+]
+dev = [
+    "pytest>=6.0",
+    "black>=22.0",
+    "isort>=5.0",
+]
+
+[project.scripts]
+run-microbench = "paired_replacement.benchmarks.scripts.run_microbench:main"
+run-microbench-torch = "paired_replacement.benchmarks.scripts.run_microbench_torch:main"
+run-autotune = "paired_replacement.benchmarks.scripts.run_autotune:main"
+
+[tool.setuptools.packages.find]
+include = ["paired_replacement*"]
+
+[tool.setuptools.package-dir]
+"paired_replacement" = "src"
+"paired_replacement.benchmarks" = "benchmarks"
