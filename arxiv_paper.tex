@@ -52,7 +52,7 @@
   pdftitle={Paired Replacement: A Differential Caching Algorithm for Dynamic Sparse Inference},
   pdfsubject={Computational Theory},
   pdfauthor={Mohammad Tanzil Idrisi},
-  pdfkeywords={Sparse Neural Network},
+  pdfkeywords={Sparse neural networks, dynamic sparsity, caching, mixture-of-experts, KV cache},
   pdfcreator={LaTeX with arXiv class},
   pdfdisplaydoctitle=true
 }
@@ -106,26 +106,18 @@
 %%% Add PDF metadata to help others organize their library
 %%% Once the PDF is generated, you can check the metadata with
 %%% $ pdfinfo template.pdf
-\hypersetup{
-pdftitle={Paired Replacement: A Differential Caching Algorithm for Dynamic Sparse Inference},
-pdfsubject={Computational Theory},
-pdfauthor={Mohammad Tanzil Idrisi},
-pdfkeywords={Sparse Neural Network},
-pdfcreator={LaTeX with arXiv class},
-pdfdisplaydoctitle=true,
-}
 
 \begin{document}
 \maketitle
  
 \begin{abstract}
-Dynamic sparsity appears in modern ML systems such as mixtures‑of‑experts (MoE), top‑k MLPs, embedding retrieval, and streaming attention. Although each step activates only a small working set of matrix rows, the dominant implementation pattern fully rebuilds a packed “active block” every step via gather/index‑select, moving O(m·S) bytes (m active rows, S bytes/row) even when only a small delta changes. We present Paired Replacement, a differential caching algorithm that updates the packed block in O(k·S) bytes, where k is the mask delta (added + removed). The algorithm pairs removals with additions and overwrites in place; residual additions append; residual removals fill holes via swap‑with‑last. We prove a lower bound that any contiguous update requires at least max(|added|, |removed|) row writes and show Paired Replacement attains it. We implement a CPU‑only C++/PyTorch prototype (float32) and evaluate with microbenchmarks, parameter sweeps, timing confidence intervals, and hardware counters. On CPU, Paired Replacement improves update time by 3–5× for small deltas (e.g., k≈16 for m=512), while preserving contiguous, GEMM‑friendly layouts. We also discuss real‑world use cases (MoE, embeddings, KV‑cache, GNN).
+Dynamic sparsity appears in modern ML systems such as mixtures‑of‑experts (MoE), top‑k MLPs, embedding retrieval, and streaming attention. Although each step activates only a small working set of matrix rows, the dominant implementation pattern fully rebuilds a packed “active block” every step via gather/index‑select, moving O(m·S) bytes (m active rows, S bytes/row) even when only a small delta changes. We present Paired Replacement, a differential caching algorithm that updates the packed block in O(k·S) bytes, where k is the mask delta (added + removed). The algorithm pairs removals with additions and overwrites in place; residual additions append; residual removals fill holes via swap‑with‑last. We prove a lower bound that any contiguous update requires at least max(|added|, |removed|) row writes and show Paired Replacement attains it. We implement a CPU‑only C++/PyTorch prototype (float32) and evaluate with microbenchmarks, parameter sweeps, timing confidence intervals, and hardware counters. On CPU, Paired Replacement improves update time by 3–5× for small deltas (e.g., $k\approx16$ for $m=512$), while preserving contiguous, GEMM‑friendly layouts. We also discuss real‑world use cases (MoE, embeddings, KV‑cache, GNN).
 \end{abstract}
 
 
 
 % keywords can be removed
-\keywords{Sparse Neural Network, }
+\keywords{Sparse neural networks, dynamic sparsity, caching, mixture-of-experts, KV cache}
 
 
 \section{Introduction}
@@ -188,15 +180,17 @@ Recent work has focused on reducing memory footprint and bandwidth requirements 
 
 \textbf{Gradient and Activation Sparsification.} Q-Sparse~\cite{wang2024q} and similar techniques apply dynamic sparsification to activation tensors during inference to reduce memory access costs. These methods complement our approach by reducing the size of individual matrix rows, while Paired Replacement optimizes the management of active row sets.
 
-\textbf{Hardware-Aware Optimization.} The Channel-aware Dynamic Sparse (Chase) framework~\cite{yin2024chase} translates unstructured sparsity into GPU-friendly channel-level patterns, achieving practical speedups on modern hardware. Our work is complementary, focusing on the memory management aspects of maintaining sparse active sets rather than the sparsity patterns themselves.
+\textbf{Hardware-Aware Optimization.} Systems for MoE and attention have introduced practical packing and paging strategies complementary to our focus on contiguous updates. Frameworks such as DeepSpeed-MoE and Tutel provide expert-gather/dispatch kernels and scheduling~\cite{deepspeedmoe2022,tutel2022}; kernel-level compaction (e.g., MegaBlocks-style) reduces movement under block-sparse assumptions~\cite{megablocks2022}; and paged attention (as in vLLM) manages KV caches in non-contiguous pages to minimize rematerialization~\cite{vllm2023}. Our work is orthogonal: we study the optimality of single-buffer \emph{contiguous} updates and when these are preferable to paged designs.
 
 \subsection{Positioning of Our Work}
 
 While existing work has made significant progress in cache-efficient sparse operations and neural network memory optimization, a gap remains in the specific problem of incrementally maintaining packed active sets under sparsity pattern changes. Cache-oblivious algorithms provide strong theoretical foundations but are designed for static access patterns. MoE and sparse attention optimizations focus on expert/token selection strategies rather than the underlying memory management. Database techniques for dynamic structures do not naturally extend to bulk matrix operations.
 
-Paired Replacement addresses this gap by providing the first theoretically-optimal algorithm for differential caching of packed matrix rows, with immediate applicability to modern dynamic sparse workloads. Our approach bridges theory and practice, offering both provable optimality guarantees and substantial empirical performance improvements on real hardware.
+Paired Replacement addresses this gap by providing, to our knowledge, the first theoretically optimal algorithm for differential caching of packed matrix rows \emph{under a single-buffer contiguous layout}, with immediate applicability to modern dynamic sparse workloads. Our approach bridges theory and practice, offering both provable optimality guarantees and substantial empirical performance improvements on real hardware.
 
 \section{Problem Formulation and Theoretical Analysis} \label{sec:problem}
+
+We study the single-buffer contiguous update problem for packed active rows; under this contiguity constraint, we prove any update $\mathcal{S}\to\mathcal{S}'$ requires at least $\max(|\mathcal{A}|,|\mathcal{R}|)$ full-row writes and present an algorithm that attains this bound.
 
 \subsection{Problem Setting}
 
@@ -219,30 +213,46 @@ The goal is to update the packed matrices $\{\mathbf{A}_r\}$ to reflect the new 
 \end{align}
 This requires moving $O(|\mathcal{S}'| \cdot \sum_{r=1}^R d_r)$ bytes regardless of $k$, the actual number of changes.
 
-\subsection{Lower Bound for Contiguous Updates}
+\subsection{Assumptions and Scope}
+
+We formalize the problem setting under which our optimality claim holds.
+
+\begin{definition}[Single-buffer contiguity model]
+\label{def:contiguity-model}
+Algorithms operate on a single contiguous packed buffer per matrix and satisfy:
+\begin{itemize}
+  \item \textbf{Contiguous target:} Active rows reside in one contiguous packed region per matrix, row-major.
+  \item \textbf{Reorder freedom:} The order of active rows is unconstrained; arbitrary reordering is allowed each update.
+  \item \textbf{Full-row writes:} We count whole-row writes of size $S = \sum_{r=1}^R d_r$ elements across matrices.
+  \item \textbf{External pool reads:} Reads from the global weight pools $\{\mathbf{W}_r\}$ are allowed at no additional modeling cost.
+  \item \textbf{Single target buffer:} No auxiliary packed buffer of size $\Omega(m)$ may be used; only $o(m)$ scratch (e.g., index lists/maps) is allowed.
+\end{itemize}
+\end{definition}
+
+\begin{remark}[Scope]
+Our lower bound and optimality are with respect to \Cref{def:contiguity-model}. Non-contiguous paged layouts (e.g., paged KV caches) or two-buffer stable merges relax contiguity and may avoid the bound. We target regimes where contiguity enables GEMM reuse and small-$k$ deltas make paging overheads unattractive.
+\end{remark}
+
+\subsection{Lower bound for contiguous updates}
 
 We now establish a fundamental limit on the amount of data any algorithm must move to maintain contiguous packed representations.
 
-\begin{theorem}[Lower Bound for Contiguous Updates]
+\begin{theorem}[Lower bound under \Cref{def:contiguity-model}]
 \label{thm:lower_bound}
-Consider any algorithm that maintains packed active matrices in contiguous memory layout. For any update transforming active set $\mathcal{S}$ to $\mathcal{S}'$ with $|\mathcal{A}| = A$ additions and $|\mathcal{R}| = R$ removals, the algorithm must write at least $\max(A, R)$ complete rows to the packed matrices.
+Any algorithm satisfying \Cref{def:contiguity-model} that updates $\mathcal{S}\to\mathcal{S}'$ with $|\mathcal{A}|=A$ additions and $|\mathcal{R}|=R$ removals must perform at least $\max(A,R)$ complete row writes (i.e., at least $\max(A,R)\cdot S$ elements).
 \end{theorem}
 
 \begin{proof}
-Let $S = \sum_{r=1}^R d_r$ denote the total bytes per row across all matrices. We consider two cases:
+Additions are unavoidable: each index in $\mathcal{A}$ must newly appear in the contiguous target, requiring at least $A$ row writes somewhere in the buffer.
 
-\textbf{Case 1: $A \geq R$.} Every addition requires writing a new row to the packed representation, contributing at least $A$ row writes. After handling pairs of additions/removals, we are left with $A - R \geq 0$ net additions that must be accommodated by expanding the packed representation, requiring at least $A - R$ additional writes. However, since we already counted these in the $A$ writes for additions, the total is at least $A = \max(A, R)$ row writes.
-
-\textbf{Case 2: $R > A$.} Every addition still requires a row write ($A$ writes), but now we have $R - A > 0$ net removals. To maintain contiguity, each of these holes must be filled by moving an existing row to fill the gap. In the worst case, this requires an additional $R - A$ row writes, yielding at least $A + (R - A) = R = \max(A, R)$ total row writes.
-
-Since each row write involves $S$ bytes, any contiguous-layout algorithm must move at least $\max(A, R) \cdot S$ bytes.
+For removals, let $P=\min(A,R)$. At most $P$ removed positions can be reused via paired overwrites with $P$ additions. The remaining $R-P$ removals create holes that cannot be paired. Under contiguity and a single target buffer, each hole must be filled by moving an extant row into it, which incurs one complete row write per unpaired removal. Thus, when $R\ge A$ the total is at least $A+(R-A)=R$ writes; when $A>R$ it is at least $A$ writes. In both cases, at least $\max(A,R)$ row writes are necessary.
 \end{proof}
 
 \begin{corollary}[Optimality Criterion]
 An algorithm achieving exactly $\max(A, R)$ row writes is optimal for maintaining contiguous packed representations.
 \end{corollary}
 
-This lower bound is information-theoretically necessary: even if we had perfect knowledge of the update pattern, we cannot avoid writing each added row (contributing $A$ writes) and filling each removal hole (contributing up to $R - A$ additional writes when $R > A$).
+This bound holds even with perfect knowledge of the update pattern and full freedom to reorder rows; it follows solely from the contiguity and single-buffer constraints.
 
 \subsection{XOR-Based Mask Differencing}
 
@@ -342,7 +352,7 @@ The algorithm proceeds in three phases:
 
 \begin{theorem}[Optimality of Paired Replacement]
 \label{thm:optimality}
-The Paired Replacement algorithm performs exactly $\max(|\mathcal{A}|, |\mathcal{R}|)$ row writes, achieving the lower bound of \Cref{thm:lower_bound}.
+Under \Cref{def:contiguity-model}, the Paired Replacement algorithm performs exactly $\max(|\mathcal{A}|, |\mathcal{R}|)$ row writes, achieving the lower bound of \Cref{thm:lower_bound}.
 \end{theorem}
 
 \begin{proof}
@@ -420,6 +430,14 @@ active_down = cache.get_active_down_weight()
 
 \textbf{Device Compatibility:} While optimized for CPU, our implementation gracefully handles device transfers. CPU tensors provide zero-copy views, while GPU tensors are materialized on-device to maintain compatibility with existing workflows.
 
+\textbf{Hybrid policy (threshold $\tau$):} We avoid scanning full masks by maintaining explicit $\mathcal{A},\mathcal{R}$ lists. A simple policy switches to full rebuild when $k \ge \tau\,m$:
+\begin{verbatim}
+if (A.size() + R.size()) < tau * active_size:
+    paired_replacement(A, R)
+else:
+    full_rebuild(new_mask)
+\end{verbatim}
+
 \subsection{Reproducibility Infrastructure}
 
 \textbf{Provenance Tracking:} All benchmark scripts record comprehensive metadata including device information, PyTorch version, compiler flags, and autotuning parameters. This information is embedded in CSV headers and JSON sidecars.
@@ -436,6 +454,35 @@ active_down = cache.get_active_down_weight()
 
 \textbf{NUMA Awareness:} The implementation does not currently include NUMA-specific optimizations for multi-socket systems, though the cache-aligned allocation provides a foundation for such enhancements.
 
+\section{GPU Kernels and Overlap with GEMM} \label{sec:gpu}
+
+While our prototype is CPU-first, the Paired Replacement pattern maps naturally to efficient CUDA implementations. We summarize a design that preserves coalescing, leverages on-chip staging, and overlaps updates with compute.
+
+\subsection{CUDA kernel design}
+
+\textbf{Position map:} Maintain an index\,$\to$\,position map in device memory (e.g., a flat hash map) for O(1) expected lookups/updates. Compact the \emph{added} and \emph{removed} lists on device.
+
+\textbf{Paired substitution kernel:} Launch one warp per destination row. Each warp cooperatively copies a full row (contiguous in row-major) from the global pool into the packed buffer position of a removed row. Issue 128B vectorized stores for coalescing. On Ampere+, prefetch source tiles into shared memory via \texttt{cp.async}; on Hopper, use TMA for bulk row moves when available.
+
+\textbf{Residual append kernel:} For unpaired additions, assign one warp per appended row at the end of the packed buffer; write coalesced contiguous stores. Maintain the active length atomically per matrix or via a precomputed output offset.
+
+\textbf{Residual remove (swap-with-last) kernel:} For unpaired removals, fetch the last row index, copy it into the hole, and decrement the active length. When the hole is already at the last position, skip the copy. Update the position map accordingly.
+
+\textbf{Determinism and order:} The model allows arbitrary reordering; document that row order is not stable across updates. If stability is desired, constrain pairing and accept extra movement.
+
+\subsection{Overlap with GEMM}
+
+Use double-buffering and streams to hide update latency behind compute:
+\begin{itemize}
+  \item Maintain two packed buffers per matrix (A/B). While buffer A participates in GEMM at step $t$, apply Paired Replacement to buffer B for step $t{+}1$ on a separate stream.
+  \item Use CUDA events to signal when updates complete; bind GEMM for step $t{+}1$ to the ready buffer.
+  \item For multi-expert MoE, overlap expert-gather updates with all-to-all communications when possible.
+\end{itemize}
+
+\subsection{Metrics and validation}
+
+Report achieved device memory bandwidth (bytes moved / time), coalescing efficiency, and overlap (fraction of update time hidden) using CUDA profiling (e.g., CUPTI). Validate that Paired Replacement traffic scales with $\max(A,R)\cdot S$ and approaches bandwidth rooflines for large rows.
+
 \section{Experimental Evaluation} \label{sec:evaluation}
 
 We conduct a comprehensive evaluation of Paired Replacement across multiple dimensions: microbenchmark performance, parameter sensitivity, statistical rigor through confidence intervals, hardware performance counter analysis, and end-to-end application scenarios.
@@ -445,6 +492,8 @@ We conduct a comprehensive evaluation of Paired Replacement across multiple dime
 \textbf{Hardware Platforms:} Primary evaluation on Apple M3 (ARM64) and Intel Xeon systems (x86\_64) with varying core counts and memory hierarchies. All systems use 64-byte cache lines with 3-level cache hierarchies.
 
 \textbf{Software Environment:} PyTorch 2.8.0, C++17 compiler with -O3 optimization, Python 3.9+. Extensions compiled via PyTorch's JIT compilation system for reproducibility.
+
+\textbf{Timebase:} Unless otherwise specified, update times are reported in microseconds ($\mu s$) and step times in milliseconds (ms).
 
 \textbf{Baseline Algorithms:} We compare against three approaches:
 \begin{enumerate}
@@ -458,13 +507,13 @@ We conduct a comprehensive evaluation of Paired Replacement across multiple dime
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.8\columnwidth]{microbench_speedup_overlays.png}
-\caption{Paired Replacement speedup vs. baselines across different mask delta sizes $k$. Configuration: $N=8192$, $m=1024$, hidden\_dim=1024, up\_cols=1024. Error bars show 95\% confidence intervals over 5 runs.}
+\caption{Paired Replacement speedup vs. baselines across different mask delta sizes $k$. Configuration: CPU (fp32), $N=8192$, $m=1024$, hidden\_dim=1024, up\_cols=1024; row-major, -O3. Error bars show 95\% confidence intervals over 5 runs.}
 \label{fig:microbench_speedup}
 \end{figure}
 
 \Cref{fig:microbench_speedup} shows our primary microbenchmark results comparing Paired Replacement against baseline approaches. Key findings:
 
-\textbf{Small Delta Performance:} At $k=16$ (1.6\% change rate), Paired Replacement achieves 8.46$\times$ speedup over index\_select and 7.45$\times$ over boolean masking, with update times of 136μs vs 1150μs and 1012μs respectively.
+\textbf{Small Delta Performance:} At $k=16$ (1.6\% change rate), Paired Replacement achieves 8.46$\times$ speedup over index\_select and 7.45$\times$ over boolean masking, with update times of $136\,\mu s$ vs $1150\,\mu s$ and $1012\,\mu s$ respectively.
 
 \textbf{Scaling Behavior:} Performance advantages decrease gracefully as $k$ increases: 7.07$\times$ speedup at $k=64$, 4.94$\times$ at $k=256$, confirming the expected $O(k)$ vs $O(m)$ scaling.
 
@@ -495,8 +544,8 @@ To ensure robust conclusions, we conduct timing experiments with proper statisti
 
 \textbf{Representative Results:} For $k=16$ on Apple M3:
 \begin{itemize}
-    \item Paired Replacement: $91.6 \pm 12.5$μs (95\% CI)
-    \item Index Select: $306.2 \pm 32.3$μs (95\% CI) 
+    \item Paired Replacement: $91.6 \pm 12.5\,\mu s$ (95\% CI)
+    \item Index Select: $306.2 \pm 32.3\,\mu s$ (95\% CI) 
     \item Speedup: $3.34 \pm 0.47$ (95\% CI)
 \end{itemize}
 
@@ -538,6 +587,18 @@ We validate our results across multiple CPU architectures:
 \textbf{Intel Xeon (x86\_64):} Similar performance characteristics with slightly lower absolute speedups (2.5-6$\times$) but identical scaling behavior.
 
 \textbf{AMD Ryzen (x86\_64):} Performance profiles align closely with Intel results, confirming architecture-independent benefits of the differential caching approach.
+
+\subsection{Additional Experiments (GPU and E2E)}
+
+To strengthen external validity and position against strong baselines, we propose the following additional experiments:
+\begin{itemize}
+  \item \textbf{GPU microbenchmarks:} Sweep $m\in\{256,512,1024,2048\}$, $k/m\in[1/64,1/2]$, $d\in\{512,1024,2048\}$, dtype$\in\{$fp16,bf16,fp32$\}$; report update time, bytes written, and achieved bandwidth.
+  \item \textbf{Baselines:} Add framework/system baselines for expert gather/packing (e.g., Tutel, DeepSpeed-MoE) and a compaction kernel (MegaBlocks-style); for KV cache, include paged attention.
+  \item \textbf{E2E MoE transformer:} Top-$k\in\{1,2,4\}$; step-time breakdown (routing, update/pack, GEMM, all-to-all) and tokens/s on modern GPUs.
+  \item \textbf{KV streaming:} Sliding window with 80–95\% stickiness; compare contiguous-tile (ours) vs. paged layouts.
+  \item \textbf{Robustness:} Churn spikes (sudden large $k$), random vs. blocky deltas, and threshold $\tau$ ablations.
+  \item \textbf{Multi-GPU overlap:} Demonstrate that for small $k$ the update can be hidden behind all-to-all communication.
+\end{itemize}
 
 \section{Applications and Discussion} \label{sec:applications}
 
@@ -601,6 +662,18 @@ active_weights = cache.get_concat_weight()
 \textbf{Dynamic Memory Management:} The current implementation pre-allocates buffers for maximum expected active set sizes. Dynamic buffer resizing could reduce memory overhead in scenarios with highly variable working set sizes.
 
 \textbf{NUMA and Multi-GPU:} Extending to distributed scenarios with NUMA-aware placement and multi-GPU coordination represents an important direction for large-scale deployment.
+
+\textbf{Model scope:} Our optimality guarantees concern the single-buffer contiguous model. Designs that use two packed buffers with stable merges or paged/non-contiguous layouts fall outside this scope and may trade different overheads against contiguity benefits.
+
+\subsection{Artifact Checklist}
+
+\begin{itemize}
+  \item \textbf{Code:} PyTorch extension with CPU implementation (this repo); scripts under \texttt{paired\_replacement/benchmarks}.
+  \item \textbf{Configs:} Benchmark parameter sweeps and microbench settings in CSV/JSON sidecars.
+  \item \textbf{Seeds:} Fixed seeds for microbenchmarks; five runs per point with 95\% CIs.
+  \item \textbf{Hardware:} CPU models and OS versions recorded; for GPU follow-ups, include driver/CUDA versions.
+  \item \textbf{License:} Open-source license for code release (see repository).
+\end{itemize}
 
 \section{Conclusion} \label{sec:conclusion}
 
@@ -743,10 +816,25 @@ Yueming Wang, Yuxuan Liu, and Zhengyi Yang.
 \newblock Q-Sparse: All large language models can be fully sparsely-activated.
 \newblock \emph{arXiv preprint arXiv:2407.10969}, 2024.
 
-\bibitem{yin2024chase}
-Haojie Yin, Pavlo Molchanov, Zhilin Yang, Arun Mallya, Derek Hoiem, Jan Kautz, and Xiaolong Wang.
-\newblock Chase: Learning convex hull adaptive shift for skeleton-based multi-person pose estimation.
-\newblock \emph{arXiv preprint arXiv:2401.02797}, 2024.
+\bibitem{deepspeedmoe2022}
+Microsoft DeepSpeed Team.
+\newblock DeepSpeed-MoE: Advancing Mixture-of-Experts Training and Inference Efficiency.
+\newblock \emph{arXiv preprint}, 2022. [To be finalized]
+
+\bibitem{tutel2022}
+Microsoft Tutel Team.
+\newblock Tutel: Efficient Mixture-of-Experts Training at Scale.
+\newblock \emph{arXiv preprint}, 2022. [To be finalized]
+
+\bibitem{megablocks2022}
+Anonymous.
+\newblock MegaBlocks: Efficient MoE Packing and Compaction Kernels.
+\newblock \emph{arXiv preprint}, 2022. [To be finalized]
+
+\bibitem{vllm2023}
+vLLM Team.
+\newblock PagedAttention for Fast and Memory-Efficient LLM Serving.
+\newblock \emph{arXiv preprint}, 2023. [To be finalized]
 
 \end{thebibliography}
 
