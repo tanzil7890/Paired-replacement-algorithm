@@ -44,10 +44,13 @@ This provides both console scripts and traditional script execution methods. All
 
 ## End‑to‑End Torch (CPU)
 
-- Command:
-  - `python3 paired_replacement/benchmarks/scripts/run_e2e_torch.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m 1024 --batch 16 --steps 50 --device cpu`
+- Quick single run:
+  - `python3 paired_replacement/benchmarks/scripts/run_e2e_torch.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m 1024 --batch 16 --steps 50 --device cpu --outfile benchmarks/data/results_e2e_torch.csv`
   - Optional profile: `--profile --profile_out benchmarks/configs/e2e_torch_profile.json`
-- Notes: end‑to‑end crossover depends on parameter choices. Larger N and smaller m/N generally improve the paired advantage; I also enforce “sticky” masks to keep k small.
+- Sweep and plot:
+  - `python3 paired_replacement/benchmarks/scripts/run_e2e_sweep.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m_list 512,1024,2048 --batch_list 8,16,32 --steps 50 --device cpu --outfile benchmarks/data/results_e2e_torch.csv`
+  - `python3 paired_replacement/benchmarks/scripts/plot_e2e.py --csv benchmarks/data/results_e2e_torch.csv --out benchmarks/plots/e2e_speedup.png`
+- Notes: end‑to‑end crossover depends on parameter choices. Larger N and smaller m/N generally improve the paired advantage; the CSV also records the realized average delta k per step (`avg_k`) to connect E2E runs back to microbench k.
 
 ## Perf (Linux) and Instruments (macOS)
 

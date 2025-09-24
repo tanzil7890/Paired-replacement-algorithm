@@ -84,9 +84,10 @@ paired_replacement_algorithm_paper/
   - `python3 paired_replacement/benchmarks/scripts/run_microbench_torch.py --N 8192 --device cpu`
 
 ### End-to-End and Reporting
-- E2E Torch:
-  - `python3 paired_replacement/benchmarks/scripts/run_e2e_torch.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m 1024 --batch 16 --steps 50 --device cpu`
-- Profile:
+- E2E Torch sweep + plot:
+  - `python3 paired_replacement/benchmarks/scripts/run_e2e_sweep.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m_list 512,1024,2048 --batch_list 8,16,32 --steps 50 --device cpu --outfile paired_replacement/benchmarks/data/results_e2e_torch.csv`
+  - `python3 paired_replacement/benchmarks/scripts/plot_e2e.py --csv paired_replacement/benchmarks/data/results_e2e_torch.csv --out paired_replacement/benchmarks/plots/e2e_speedup.png`
+- Profile single run:
   - `python3 paired_replacement/benchmarks/scripts/run_e2e_torch.py ... --profile --profile_out paired_replacement/benchmarks/configs/e2e_torch_profile.json`
 - Multi-CPU suite:
   - `python3 paired_replacement/benchmarks/scripts/run_multi_cpu_suite.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m 1024 --ks 16,64,256,1024 --steps_per_k 50 --repeats 5 --device cpu --outdir results`

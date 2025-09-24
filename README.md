@@ -148,6 +148,10 @@ See `docs/installation.md` for detailed installation instructions.
   - Run: `python3 paired_replacement/benchmarks/scripts/run_sweep.py --Ns 100000,1000000 --ratios 0.01,0.05,0.1 --ks 8,32,128,512,2048 --patterns random,block --repeats 3 --up_cols 256 --hidden_dim 256 --outfile benchmarks/data/results_sweep.csv`
   - Plot: `python3 paired_replacement/benchmarks/scripts/plot_sweep.py --csv benchmarks/data/results_sweep.csv --out benchmarks/plots/sweep_plots.png`
 
+- End-to-end MoE-like benchmark (CPU):
+  - Sweep: `python3 paired_replacement/benchmarks/scripts/run_e2e_sweep.py --N 8192 --hidden_dim 1024 --up_cols 1024 --m_list 512,1024,2048 --batch_list 8,16,32 --steps 50 --device cpu --outfile benchmarks/data/results_e2e_torch.csv`
+  - Plot: `python3 paired_replacement/benchmarks/scripts/plot_e2e.py --csv benchmarks/data/results_e2e_torch.csv --out benchmarks/plots/e2e_speedup.png`
+
 Notes:
 - The PyTorch extension compiles locally (CPU) and exposes the custom class as `torch.classes.paired.WeightCache`.
 - For Apple Silicon (ARM64), SIMD headers are guarded; no SIMD is used.
@@ -253,4 +257,3 @@ python3 paired_replacement/benchmarks/scripts/merge_multi_cpu.py --roots results
 - Paper plan, theory, and evaluation methodology: `paper/paper_outline.md`
 
 If you deploy this or need help tuning an e2e setup (CPU or GPU), open an issue — I’m happy to help.
-
