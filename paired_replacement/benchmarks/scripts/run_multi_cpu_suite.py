@@ -35,6 +35,10 @@ def main():
     ap.add_argument("--perf", action="store_true", help="Include Linux perf run if available")
     ap.add_argument("--bw_preset", type=str, default="intel")
     ap.add_argument("--outdir", type=str, default="benchmarks/results")
+    # E2E sweep knobs
+    ap.add_argument("--e2e_m_list", type=str, default="512,1024,2048")
+    ap.add_argument("--e2e_batch_list", type=str, default="8,16,32")
+    ap.add_argument("--e2e_steps", type=int, default=50)
     args = ap.parse_args()
 
     # Destination directory tagged by host and timestamp
@@ -76,7 +80,17 @@ def main():
          "--repeats", str(args.repeats), "--device", args.device,
          "--outfile", str(ci_csv)])
 
-    # 5) perf (Linux only)
+    # 5) E2E sweep + plot
+    e2e_csv = root / "results_e2e_torch.csv"
+    e2e_png = root / "e2e_speedup.png"
+    run(["python3", "benchmarks/scripts/run_e2e_sweep.py",
+         "--N", str(args.N), "--hidden_dim", str(args.hidden_dim), "--up_cols", str(args.up_cols),
+         "--gate_cols", str(args.gate_cols), "--m_list", args.e2e_m_list, "--batch_list", args.e2e_batch_list,
+         "--steps", str(args.e2e_steps), "--device", args.device, "--outfile", str(e2e_csv)])
+    if e2e_csv.exists():
+        run(["python3", "benchmarks/scripts/plot_e2e.py", "--csv", str(e2e_csv), "--out", str(e2e_png)])
+
+    # 6) perf (Linux only)
     perf_csv = None
     perf_png = None
     if args.perf and platform.system().lower() == "linux":
@@ -90,11 +104,12 @@ def main():
         if perf_csv.exists():
             run(["python3", "benchmarks/scripts/plot_perf.py", "--perf_csv", str(perf_csv), "--out", str(perf_png)])
 
-    # 6) report
+    # 7) report
     report_md = root / "report.md"
     cmd = ["python3", "benchmarks/scripts/generate_report.py",
            "--torch_csv", str(torch_csv), "--timing_ci_csv", str(ci_csv),
-           "--overlay_png", str(overlay_png), "--out_md", str(report_md)]
+           "--overlay_png", str(overlay_png), "--e2e_csv", str(e2e_csv), "--e2e_png", str(e2e_png),
+           "--out_md", str(report_md)]
     if perf_csv and Path(perf_csv).exists():
         cmd += ["--perf_csv", str(perf_csv)]
         if perf_png and Path(perf_png).exists():
@@ -106,4 +121,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

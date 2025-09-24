@@ -85,6 +85,8 @@ def main():
     ap.add_argument("--overlay_png", type=str, default="benchmarks/microbench_speedup_overlays.png")
     ap.add_argument("--perf_csv", type=str, default="")
     ap.add_argument("--perf_png", type=str, default="")
+    ap.add_argument("--e2e_csv", type=str, default="")
+    ap.add_argument("--e2e_png", type=str, default="")
     ap.add_argument("--instruments_json", type=str, default="")
     ap.add_argument("--out_md", type=str, default="benchmarks/report.md")
     args = ap.parse_args()
@@ -94,6 +96,8 @@ def main():
     overlay_png = Path(args.overlay_png)
     perf_csv = Path(args.perf_csv) if args.perf_csv else None
     perf_png = Path(args.perf_png) if args.perf_png else None
+    e2e_csv = Path(args.e2e_csv) if args.e2e_csv else None
+    e2e_png = Path(args.e2e_png) if args.e2e_png else None
     instruments_json = Path(args.instruments_json) if args.instruments_json else None
 
     micro = summarize_microbench(torch_csv)
@@ -134,6 +138,33 @@ def main():
             if perf_png and perf_png.exists():
                 f.write(f"\n![perf plots]({perf_png})\n\n")
 
+        # E2E summary
+        if e2e_csv and e2e_csv.exists():
+            f.write("## End-to-End (MoE-like, CPU)\n")
+            try:
+                rows = read_rows_skip_comments(e2e_csv)
+                # find best speedup and show typical config
+                best = None
+                for r in rows:
+                    try:
+                        sp = float(r.get("speedup", "nan"))
+                        m = int(r.get("m", -1))
+                        b = int(r.get("batch", -1))
+                        ak = float(r.get("avg_k", "nan"))
+                    except Exception:
+                        continue
+                    if sp == sp:  # not NaN
+                        if best is None or sp > best[0]:
+                            best = (sp, m, b, ak)
+                if best:
+                    f.write(
+                        f"- Best speedup: {best[0]:.2f}× at m={best[1]}, batch={best[2]} (avg k≈{best[3]:.1f}).\n"
+                    )
+            except Exception:
+                pass
+            if e2e_png and e2e_png.exists():
+                f.write(f"\n![E2E speedup]({e2e_png})\n\n")
+
         if inst:
             f.write("## Instruments summary (macOS)\n")
             p = inst.get("paired", {}) ; r = inst.get("rebuild", {}) ; d = inst.get("diff", {})
@@ -155,4 +186,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
